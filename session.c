@@ -5,11 +5,14 @@
 #include <sys/param.h>
 #include <inttypes.h>
 #include <assert.h>
+#include <xpc/xpc_serialization.h>
+#include <xpc/xpc_debug.h>
 #include "stream.h"
 
 static void _rxpc_session_send_settings(struct rxpc_session *s);
 static void _rxpc_session_root_stream_opened(struct rxpc_stream *stream);
 static void _rxpc_session_reply_stream_opened(struct rxpc_stream *stream);
+static void _rxpc_session_message_debug(struct rxpc_stream *stream, struct rxpc_msg_header *header, const void *data);
 
 void rxpc_session_init(struct rxpc_session *s) {
     s->session = NULL;
@@ -28,6 +31,7 @@ void rxpc_session_open(struct rxpc_session *s, nghttp2_session_callbacks *cb, vo
     _rxpc_session_send_settings(s);
 
     cbs.opened = _rxpc_session_root_stream_opened;
+    cbs.message = _rxpc_session_message_debug;
     s->stream_root = rxpc_stream_open(s, &cbs);
 }
 
@@ -65,12 +69,24 @@ static void _rxpc_session_root_stream_opened(struct rxpc_stream *stream) {
     xpc_free(dict);
 
     cbs.opened = _rxpc_session_reply_stream_opened;
+    cbs.message = _rxpc_session_message_debug;
     stream->session->stream_reply = rxpc_stream_open(stream->session, &cbs);
     rxpc_session_send_pending(stream->session);
 }
 
 static void _rxpc_session_reply_stream_opened(struct rxpc_stream *stream) {
     rxpc_stream_send(stream, RXPC_TYPE_HELLO, RXPC_FLAG_REPLY_CHANNEL, 0, NULL);
+}
+
+static void _rxpc_session_message_debug(struct rxpc_stream *stream, struct rxpc_msg_header *header, const void *data) {
+    printf("rxpc: got message { type = %u, flags = %u, msg_id = %" PRIu64 " }\n",
+            header->type, header->flags, header->msg_id);
+    if (header->length > 0) {
+        xpc_object_t o = xpc_deserialize(data, header->length);
+        xpc_debug_print_stdout(o);
+        printf("\n");
+        xpc_free(o);
+    }
 }
 
 static int _rxpc_session_cb_frame_recv(nghttp2_session *session, const nghttp2_frame *frame, void *user_data) {
@@ -103,6 +119,7 @@ static int _rxpc_session_cb_data_chunk_recv(nghttp2_session *session, uint8_t fl
         if (stream->recv_header_pos < sizeof(struct rxpc_msg_header)) {
             if (stream->recv_header_pos == 0 && len >= sizeof(struct rxpc_msg_header)) { // 99% of cases
                 *((struct rxpc_msg_header *) stream->recv_header_data) = *((struct rxpc_msg_header *) data);
+                stream->recv_header_pos = sizeof(struct rxpc_msg_header);
                 data += sizeof(struct rxpc_msg_header);
                 len -= sizeof(struct rxpc_msg_header);
             } else {
@@ -120,10 +137,15 @@ static int _rxpc_session_cb_data_chunk_recv(nghttp2_session *session, uint8_t fl
                 fprintf(stderr, "rxpc: recv bad magic %" PRIx32, header->magic);
                 return -1;
             }
+            if (header->version != RXPC_MSG_VERSION) {
+                fprintf(stderr, "rxpc: recv bad version %" PRIx32, header->version);
+                return -1;
+            }
             if (header->length > 0x10000) {
                 fprintf(stderr, "rxpc: recv message too long: %" PRIu64 "\n", header->length);
                 return -1;
             }
+            printf("starting data read of %lli\n", header->length);
         }
 
         // Read the data
@@ -137,10 +159,10 @@ static int _rxpc_session_cb_data_chunk_recv(nghttp2_session *session, uint8_t fl
             if (!stream->recv_data)
                 stream->recv_data = malloc(header->length);
             tlen = MIN(len, header->length - stream->recv_data_pos);
-            memcpy(&stream->recv_data[stream->recv_data_pos], header, tlen);
-            stream->recv_data_pos += tlen;
+            memcpy(&stream->recv_data[stream->recv_data_pos], data, tlen);
             data += tlen;
             len -= tlen;
+            stream->recv_data_pos += tlen;
 
             if (stream->recv_data_pos != header->length)
                 break; // Incomplete
