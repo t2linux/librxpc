@@ -35,8 +35,6 @@ struct rxpc_stream_pending_data {
 };
 
 struct rxpc_stream *rxpc_stream_open(struct rxpc_session *session, struct rxpc_stream_callbacks *cbs);
-struct rxpc_stream_pending_data *rxpc_stream_send_alloc(size_t size);
-void rxpc_stream_send_raw(struct rxpc_stream *stream, struct rxpc_stream_pending_data *buffer);
 void rxpc_stream_send(struct rxpc_stream *stream, uint8_t type, uint16_t flags, uint64_t msg_id, xpc_object_t data);
 
 #endif //RXPC_STREAM_H

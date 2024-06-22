@@ -53,18 +53,21 @@ static void _rxpc_ev_event_callback(struct bufferevent *bev, short events, void 
 
         callbacks = rxpc_session_create_callbacks(&session_data->session);
         nghttp2_session_callbacks_set_send_callback(callbacks, _rxpc_session_cb_send);
-        rxpc_session_open(&session_data->session, callbacks, session_data);
+        rxpc_session_open(&session_data->session, callbacks, session_data, session_data->ready_cbs);
         nghttp2_session_callbacks_del(callbacks);
 
-        if (rxpc_session_send_pending(&session_data->session))
+        if (rxpc_session_send_pending(&session_data->session)) {
             rxpc_session_terminate(&session_data->session);
+        }
     } else {
         rxpc_session_terminate(&session_data->session);
     }
 }
 
-struct rxpc_libevent_session *rxpc_libevent_session_create(struct event_base *evbase) {
+struct rxpc_libevent_session *rxpc_libevent_session_create(
+		struct event_base *evbase, struct rxpc_stream_callbacks *ready_cbs) {
     struct rxpc_libevent_session *session_data = malloc(sizeof(struct rxpc_libevent_session));
+    session_data->ready_cbs = ready_cbs;
     rxpc_session_init(&session_data->session);
     session_data->bev = bufferevent_socket_new(evbase, -1, BEV_OPT_DEFER_CALLBACKS | BEV_OPT_CLOSE_ON_FREE);
     bufferevent_enable(session_data->bev, EV_READ | EV_WRITE);

@@ -13,6 +13,13 @@ struct rxpc_msg_header {
     uint64_t msg_id;
 };
 
+// Flags
+// 1st bit is heartbeat
+// 2nd bit is heartbeat reply
+// 5: Open new file_tx stream
+// 6: Reply from noew file_tx stream
+// 7: Sysdiagnose init handshake
+
 // RXPC_TYPE_HELLO - first command sent on a stream, some sort of an early handshake.
 #define RXPC_TYPE_HELLO 0
 

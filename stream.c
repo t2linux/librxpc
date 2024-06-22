@@ -66,6 +66,7 @@ void rxpc_stream_send(struct rxpc_stream *stream, uint8_t type, uint16_t flags, 
     header->flags = flags;
     header->msg_id = msg_id;
     header->length = data_size;
+    //printf("sending msg_id: %d\n", msg_id);
     if (data)
         xpc_serialize(data, &sdata->data[sizeof(struct rxpc_msg_header)]);
     rxpc_stream_send_raw(stream, sdata);

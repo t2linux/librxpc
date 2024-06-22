@@ -12,7 +12,6 @@
 static void _rxpc_session_send_settings(struct rxpc_session *s);
 static void _rxpc_session_root_stream_opened(struct rxpc_stream *stream);
 static void _rxpc_session_reply_stream_opened(struct rxpc_stream *stream);
-static void _rxpc_session_message_debug(struct rxpc_stream *stream, struct rxpc_msg_header *header, const void *data);
 
 void rxpc_session_init(struct rxpc_session *s) {
     s->session = NULL;
@@ -20,7 +19,8 @@ void rxpc_session_init(struct rxpc_session *s) {
     s->stream_reply = NULL;
 }
 
-void rxpc_session_open(struct rxpc_session *s, nghttp2_session_callbacks *cb, void *transport_data) {
+void rxpc_session_open(struct rxpc_session *s, nghttp2_session_callbacks *cb,
+		void *transport_data, struct rxpc_stream_callbacks *ready_cbs) {
     struct rxpc_stream_callbacks cbs = {0};
     nghttp2_option *opt;
     s->transport_data = transport_data;
@@ -30,9 +30,7 @@ void rxpc_session_open(struct rxpc_session *s, nghttp2_session_callbacks *cb, vo
     nghttp2_option_del(opt);
     _rxpc_session_send_settings(s);
 
-    cbs.opened = _rxpc_session_root_stream_opened;
-    cbs.message = _rxpc_session_message_debug;
-    s->stream_root = rxpc_stream_open(s, &cbs);
+    s->stream_root = rxpc_stream_open(s, ready_cbs);
 }
 
 void rxpc_session_terminate(struct rxpc_session *s) {
@@ -59,26 +57,7 @@ static void _rxpc_session_send_settings(struct rxpc_session *s) {
         fprintf(stderr, "xrpc: could not submit settings: %s", nghttp2_strerror(rv));
 }
 
-static void _rxpc_session_root_stream_opened(struct rxpc_stream *stream) {
-    struct rxpc_stream_callbacks cbs = {0};
-    xpc_object_t dict;
-
-    dict = xpc_dictionary_create(NULL, NULL, 0);
-    // optional: xpc_dictionary_set_int64("ServiceVersion", value);
-    rxpc_stream_send(stream, RXPC_TYPE_HELLO, 0, 0, dict);
-    xpc_free(dict);
-
-    cbs.opened = _rxpc_session_reply_stream_opened;
-    cbs.message = _rxpc_session_message_debug;
-    stream->session->stream_reply = rxpc_stream_open(stream->session, &cbs);
-    rxpc_session_send_pending(stream->session);
-}
-
-static void _rxpc_session_reply_stream_opened(struct rxpc_stream *stream) {
-    rxpc_stream_send(stream, RXPC_TYPE_HELLO, RXPC_FLAG_REPLY_CHANNEL, 0, NULL);
-}
-
-static void _rxpc_session_message_debug(struct rxpc_stream *stream, struct rxpc_msg_header *header, const void *data) {
+void _rxpc_session_message_debug(struct rxpc_stream *stream, struct rxpc_msg_header *header, const void *data) {
     printf("rxpc: got message { type = %u, flags = %u, msg_id = %" PRIu64 " }\n",
             header->type, header->flags, header->msg_id);
     if (header->length > 0) {
@@ -94,7 +73,7 @@ static int _rxpc_session_cb_frame_recv(nghttp2_session *session, const nghttp2_f
             nghttp2_session_get_stream_user_data(session, frame->hd.stream_id);
     switch (frame->hd.type) {
         case NGHTTP2_HEADERS:
-            fprintf(stderr, "rxpc: headers received\n");
+            //fprintf(stderr, "rxpc: headers received\n");
             if (stream->cbs.opened)
                 stream->cbs.opened(stream);
             break;
@@ -145,14 +124,17 @@ static int _rxpc_session_cb_data_chunk_recv(nghttp2_session *session, uint8_t fl
                 fprintf(stderr, "rxpc: recv message too long: %" PRIu64 "\n", header->length);
                 return -1;
             }
+#ifdef  DEBUG
             printf("starting data read of %lli\n", header->length);
+#endif
         }
 
         // Read the data
         if (stream->recv_data_pos == 0 && len >= header->length) {
             // No need to copy the data, it's all in the buffer
             assert(stream->recv_data == NULL);
-            stream->cbs.message(stream, header, data);
+            if (stream->cbs.message)
+                stream->cbs.message(stream, header, data);
             data += header->length;
             len -= header->length;
         } else if (len > 0) {
@@ -167,7 +149,8 @@ static int _rxpc_session_cb_data_chunk_recv(nghttp2_session *session, uint8_t fl
             if (stream->recv_data_pos != header->length)
                 break; // Incomplete
 
-            stream->cbs.message(stream, header, stream->recv_data);
+            if (stream->cbs.message)
+                stream->cbs.message(stream, header, stream->recv_data);
         }
 
         // Message complete, prepare for next message
